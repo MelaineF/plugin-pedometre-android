@@ -6,6 +6,8 @@
         android:name="android.hardware.sensor.stepcounter"
         android:required="false" />
 
+    <uses-permission android:name="android.permission.ACTIVITY_RECOGNITION"/>
+
     <application
         android:allowBackup="true"
         android:dataExtractionRules="@xml/data_extraction_rules"
@@ -14,10 +16,18 @@
         android:label="@string/app_name"
         android:roundIcon="@mipmap/ic_launcher_round"
         android:supportsRtl="true"
-        android:theme="@style/Theme.PodometreAPI">
+        android:theme="@style/Theme.PodometreAPI"
+        tools:targetApi="31">
         <activity
             android:name=".MainActivity"
-            android:exported="false" />
+            android:exported="true">
+            <intent-filter>
+                <!-- DÉBUT DE L'AJOUT -->
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+                <!-- FIN DE L'AJOUT -->
+            </intent-filter>
+        </activity>
     </application>
 
 </manifest>
