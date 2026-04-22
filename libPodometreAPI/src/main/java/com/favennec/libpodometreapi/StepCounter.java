@@ -29,6 +29,7 @@ public class StepCounter implements SensorEventListener {
     private static final String PREFS_NAME = "StepCounterPrefs";
     private static final String KEY_INITIAL_STEPS = "initial_steps";
     private static final String KEY_LAST_SAVE_DATE = "last_save_date";
+    private static final String KEY_STEPS_TODAY = "steps_today";
 
 
     public StepCounter(Context context, StepListener listener) {
@@ -48,10 +49,13 @@ public class StepCounter implements SensorEventListener {
 
     /**
      * Enregistre le listener pour commencer à écouter les événements du capteur.
+     * Le batching (10s) permet au CPU de rester endormi entre les mises à jour.
      */
     public void start() {
         if (stepSensor != null) {
-            sensorManager.registerListener(this, stepSensor, SensorManager.SENSOR_DELAY_UI);
+            // maxReportLatencyUs = 10 000 000 µs = 10 secondes de batching hardware
+            // Le chip accumule les pas et ne réveille le CPU qu'une fois toutes les 10s
+            sensorManager.registerListener(this, stepSensor, SensorManager.SENSOR_DELAY_NORMAL, 10_000_000);
         }
     }
 
@@ -76,13 +80,16 @@ public class StepCounter implements SensorEventListener {
         int initialSteps = prefs.getInt(KEY_INITIAL_STEPS, -1);
         Log.d(TAG, "onSensorChanged: Date du jour=" + todayDate + ", Dernière date sauvée=" + lastSaveDate + ", Pas initiaux sauvés=" + initialSteps);
 
-        // Si la date a changé (nouveau jour) ou si c'est la toute première fois qu'on lance l'app,
-        // on réinitialise le compteur pour la journée.
-        if (!todayDate.equals(lastSaveDate) || initialSteps == -1) {
-            Log.i(TAG, "onSensorChanged: NOUVEAU JOUR ou PREMIERE UTILISATION. Réinitialisation des pas pour la journée."); // 'i' pour info
+        // Nouveau jour, première utilisation, ou reboot détecté (totalStepsFromBoot < initialSteps)
+        boolean isNewDay = !todayDate.equals(lastSaveDate);
+        boolean isFirstUse = initialSteps == -1;
+        boolean isReboot = !isNewDay && !isFirstUse && totalStepsFromBoot < initialSteps;
+
+        if (isNewDay || isFirstUse || isReboot) {
+            if (isReboot) Log.i(TAG, "onSensorChanged: REBOOT DETECTE. Réinitialisation du compteur.");
+            else Log.i(TAG, "onSensorChanged: NOUVEAU JOUR ou PREMIERE UTILISATION. Réinitialisation des pas pour la journée.");
             initialSteps = totalStepsFromBoot;
 
-            // Sauvegarder cette nouvelle valeur initiale et la date d'aujourd'hui
             SharedPreferences.Editor editor = prefs.edit();
             editor.putInt(KEY_INITIAL_STEPS, initialSteps);
             editor.putString(KEY_LAST_SAVE_DATE, todayDate);
@@ -96,9 +103,21 @@ public class StepCounter implements SensorEventListener {
 
         Log.d(TAG, "onSensorChanged: Calcul -> totalSteps(" + totalStepsFromBoot + ") - initialSteps(" + initialSteps + ") = " + stepsToday);
 
+        // Persister les pas du jour pour pouvoir les lire sans attendre le prochain événement capteur
+        prefs.edit().putInt(KEY_STEPS_TODAY, stepsToday).apply();
+
         if (listener != null) {
             listener.onStepChanged(stepsToday);
         }
+    }
+
+    /** Retourne les derniers pas du jour connus sans attendre un événement capteur. */
+    public static int getLastKnownStepsToday(Context context) {
+        SharedPreferences prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE);
+        String todayDate = new SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).format(new Date());
+        String lastSaveDate = prefs.getString(KEY_LAST_SAVE_DATE, "");
+        if (!todayDate.equals(lastSaveDate)) return 0; // nouveau jour, compteur remis à zéro
+        return prefs.getInt(KEY_STEPS_TODAY, 0);
     }
 
     @Override

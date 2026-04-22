@@ -1,0 +1,191 @@
+========================================================
+  GUIDE D'INTEGRATION DU PLUGIN PODOMETRE DANS UNITY
+========================================================
+
+--------------------------
+  ETAPES D'INTEGRATION
+--------------------------
+
+1. Compiler le plugin en .aar depuis Android Studio
+   - Build > Make Module 'libPodometreAPI'
+   - Le fichier .aar se trouve dans :
+     libPodometreAPI/build/outputs/aar/libPodometreAPI-release.aar
+
+2. Importer le .aar dans Unity
+   - Copier le fichier .aar dans : Assets/Plugins/Android/
+
+3. Creer un GameObject dans Unity
+   - Creer un GameObject vide dans ta scene
+   - Le nommer exactement : PedometerManager
+   - Lui attacher le script C# fourni ci-dessous (PedometerManager.cs)
+
+4. Demander la permission ACTIVITY_RECOGNITION au lancement
+   - Sur Android 10+, la permission doit etre demandee au runtime
+   - Le script ci-dessous s'en charge automatiquement
+
+5. Initialiser le bridge et demarrer le comptage
+   - Appeler Initialize() puis StartCounting() apres que la permission est accordee
+   - Le script ci-dessous s'en charge automatiquement
+
+
+--------------------------
+  CODE C# UNITY COMPLET
+--------------------------
+
+Attacher ce script sur le GameObject "PedometerManager" :
+
+------------------------------------------------------
+
+using UnityEngine;
+using UnityEngine.Android;
+
+public class PedometerManager : MonoBehaviour
+{
+    private AndroidJavaClass bridge;
+    private bool bridgeInitialized = false;
+
+    void Start()
+    {
+#if UNITY_ANDROID && !UNITY_EDITOR
+        if (!Permission.HasUserAuthorizedPermission("android.permission.ACTIVITY_RECOGNITION"))
+        {
+            Permission.RequestUserPermission("android.permission.ACTIVITY_RECOGNITION");
+        }
+        else
+        {
+            InitBridge();
+        }
+#endif
+    }
+
+    // Appelee automatiquement par Unity apres la reponse de l'utilisateur a la permission
+    void OnApplicationFocus(bool hasFocus)
+    {
+#if UNITY_ANDROID && !UNITY_EDITOR
+        if (hasFocus && Permission.HasUserAuthorizedPermission("android.permission.ACTIVITY_RECOGNITION"))
+        {
+            InitBridge();
+        }
+#endif
+    }
+
+    private void InitBridge()
+    {
+        if (bridgeInitialized) return;
+
+        bridge = new AndroidJavaClass("com.favennec.libpodometreapi.PedometerBridge");
+
+        AndroidJavaObject activity = new AndroidJavaClass("com.unity3d.player.UnityPlayer")
+                                         .GetStatic<AndroidJavaObject>("currentActivity");
+
+        // Parametres :
+        //   - activity           : le contexte Android
+        //   - "PedometerManager" : nom exact du GameObject Unity qui recevra les mises a jour
+        //   - "OnStepUpdate"     : nom exact de la methode sur ce GameObject
+        bridge.CallStatic("Initialize", activity, "PedometerManager", "OnStepUpdate");
+
+        // Verifier si le telephone a un capteur de pas hardware
+        bool sensorAvailable = bridge.CallStatic<bool>("IsSensorAvailable");
+        if (!sensorAvailable)
+        {
+            Debug.LogWarning("[Pedometre] Ce telephone n'a pas de capteur de pas hardware !");
+            return;
+        }
+
+        bridge.CallStatic("StartCounting");
+        bridgeInitialized = true;
+        Debug.Log("[Pedometre] Bridge initialise et comptage demarre.");
+    }
+
+    // Appelee automatiquement par le plugin Android a chaque mise a jour des pas
+    // (environ toutes les 10 secondes grace au batching hardware)
+    public void OnStepUpdate(string steps)
+    {
+        int count = int.Parse(steps);
+        Debug.Log("[Pedometre] Pas recus : " + count);
+
+        // C'est ici que tu utilises les pas pour ton jeu
+        // Exemple : GameManager.Instance.UpdateSteps(count);
+    }
+
+    // Appeler GetCurrentSteps() si tu as besoin de lire les pas a la demande
+    // (sans attendre le prochain callback)
+    public int GetCurrentSteps()
+    {
+#if UNITY_ANDROID && !UNITY_EDITOR
+        if (bridge != null)
+            return bridge.CallStatic<int>("GetStepsToday");
+#endif
+        return 0;
+    }
+
+    void OnApplicationQuit()
+    {
+#if UNITY_ANDROID && !UNITY_EDITOR
+        if (bridge != null)
+            bridge.CallStatic("StopCounting");
+#endif
+    }
+}
+
+------------------------------------------------------
+
+
+--------------------------
+  RESUME DES METHODES DISPONIBLES
+--------------------------
+
+bridge.CallStatic("Initialize", activity, gameObjectName, methodName)
+  -> Initialise le bridge. A appeler une seule fois.
+  -> gameObjectName : nom du GameObject Unity (doit correspondre exactement)
+  -> methodName     : nom de la methode qui recoit les pas (signature : void Method(string steps))
+
+bridge.CallStatic<bool>("IsSensorAvailable")
+  -> Retourne true si le telephone a un capteur de pas hardware
+  -> A verifier avant d'appeler StartCounting()
+
+bridge.CallStatic("StartCounting")
+  -> Demarre le Foreground Service Android (compte les pas meme app en background)
+
+bridge.CallStatic("StopCounting")
+  -> Arrete le service et le comptage
+
+bridge.CallStatic<int>("GetStepsToday")
+  -> Retourne le nombre de pas du jour en int (lecture depuis le cache)
+  -> Fonctionne meme si le service vient de demarrer (lit les SharedPreferences)
+
+
+--------------------------
+  NOTES IMPORTANTES
+--------------------------
+
+- Le nom du GameObject Unity et le nom de la methode doivent correspondre
+  EXACTEMENT a ce que tu passes dans Initialize().
+
+- Le plugin compte les pas depuis minuit (remise a zero automatique chaque jour).
+
+- Les mises a jour arrivent environ toutes les 10 secondes (batching hardware).
+  Pour ton jeu de marche, c'est largement suffisant.
+
+- Le Foreground Service affiche une notification systeme obligatoire (exigence Android).
+  Tu peux personnaliser le texte dans StepCounterService.java.
+
+- Si le telephone redémarre en cours de journee, le compteur repart de 0 pour la session
+  mais les pas de la journee sont perdus (comportement normal du capteur Android).
+
+- Sur Android 14+, la permission FOREGROUND_SERVICE_DATA_SYNC est declaree
+  automatiquement via le manifest de la lib (pas besoin de l'ajouter manuellement).
+
+- En mode editeur Unity (UNITY_EDITOR), tous les appels Android sont desactives
+  automatiquement grace aux directives #if UNITY_ANDROID && !UNITY_EDITOR.
+
+- Si IsSensorAvailable() retourne false, le telephone n'a pas de puce step counter
+  (rare sur les telephones recents, plus courant sur les anciens appareils ou emulateurs).
+
+
+
+//////
+
+Dans Android Studio → Build > Make Module 'libPodometreAPI' → récupère le .aar dans libPodometreAPI/build/outputs/aar/
+Colle le .aar dans Assets/Plugins/Android/ dans Unity
+Crée un GameObject PedometerManager, colle le script du .txt
